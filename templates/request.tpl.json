@@ -1,0 +1,17 @@
+{
+  "endpoint": "projects/{{.ProjectID}}/locations/{{.LocationID}}/publishers/google/models/{{.ModelID}}",
+  "instances": [
+    {
+      "prompt": "{{.Prompt}}"
+    }
+  ],
+  "parameters": {
+    "aspectRatio": "{{.AspectRatio}}",
+    "sampleCount": 1,
+    "durationSeconds": "1",
+    "personGeneration": "allow_all",
+    "addWatermark": true,
+    "includeRaiReason": true,
+    "generateAudio": true
+  }
+}
