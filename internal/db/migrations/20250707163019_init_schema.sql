@@ -32,10 +32,19 @@ CREATE TABLE IF NOT EXISTS user_logs (
     video_path TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+CREATE TABLE IF NOT EXISTS pending_videos (
+                                              id INT AUTO_INCREMENT PRIMARY KEY,
+                                              user_id BIGINT,
+                                              prompt TEXT,
+                                              video_path TEXT,
+                                              created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
+DROP TABLE IF EXISTS pending_videos;
 DROP TABLE IF EXISTS user_logs;
 DROP TABLE IF EXISTS billing_transactions;
 DROP TABLE IF EXISTS users;

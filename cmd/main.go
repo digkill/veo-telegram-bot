@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/digkill/veo-telegram-bot/internal/logger"
 	"log"
 
 	"github.com/digkill/veo-telegram-bot/internal/bot"
@@ -12,6 +13,7 @@ import (
 
 func main() {
 
+	logger.Init()
 	// подключаем БД
 	db.Connect()
 

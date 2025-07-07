@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	_ "path/filepath"
 	"strings"
 	"text/template"
 	"time"
@@ -73,7 +74,7 @@ func GenerateVideo(prompt string, telegramID int64) (string, error) {
 
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("ошибка curl: %w", err)
+		return "", fmt.Errorf("❌ ошибка curl: %w", err)
 	}
 
 	var resp map[string]interface{}
@@ -83,45 +84,59 @@ func GenerateVideo(prompt string, telegramID int64) (string, error) {
 
 	opID, ok := resp["name"].(string)
 	if !ok {
-		return "", fmt.Errorf("не удалось извлечь operation ID")
+		return "", fmt.Errorf("❌ не удалось извлечь operation ID")
 	}
 
 	// polling
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 24; i++ {
 		time.Sleep(10 * time.Second)
 		fetchOut, err := fetchOperation(opID)
 		if err != nil {
 			return "", err
 		}
 
-		var fetchResp map[string]interface{}
+		var fetchResp struct {
+			Done     bool `json:"done"`
+			Response struct {
+				Videos []struct {
+					BytesBase64Encoded string `json:"bytesBase64Encoded"`
+					MimeType           string `json:"mimeType"`
+				} `json:"videos"`
+			} `json:"response"`
+		}
+
 		if err := json.Unmarshal(fetchOut, &fetchResp); err != nil {
 			return "", err
 		}
 
-		predictions, ok := fetchResp["predictions"].([]interface{})
-		if ok && len(predictions) > 0 {
-			firstPred := predictions[0].(map[string]interface{})
-			videoBase64, ok := firstPred["videoBytes"].(string)
-			if !ok {
-				return "", fmt.Errorf("videoBytes отсутствует")
-			}
+		// 🔍 логируем ответ в файл
+		logDir := "storage/logs"
+		os.MkdirAll(logDir, 0755)
+		logFile := fmt.Sprintf("%s/veo_raw_%d.json", logDir, time.Now().Unix())
+		_ = os.WriteFile(logFile, fetchOut, 0644)
 
-			videoData, err := base64.StdEncoding.DecodeString(videoBase64)
+		if fetchResp.Done && len(fetchResp.Response.Videos) > 0 {
+			video := fetchResp.Response.Videos[0]
+			videoData, err := base64.StdEncoding.DecodeString(video.BytesBase64Encoded)
 			if err != nil {
 				return "", err
+			}
+
+			ext := ".mp4"
+			if strings.Contains(video.MimeType, "webm") {
+				ext = ".webm"
 			}
 
 			// создаём директорию
 			dir := fmt.Sprintf("storage/media/%d", telegramID)
 			os.MkdirAll(dir, 0755)
 
-			filename := fmt.Sprintf("%s/video_%d.mp4", dir, time.Now().Unix())
+			filename := fmt.Sprintf("%s/video_%d%s", dir, time.Now().Unix(), ext)
 			if err := os.WriteFile(filename, videoData, 0644); err != nil {
 				return "", err
 			}
 
-			// логируем генерацию
+			// лог
 			_, _ = db.DB.Exec(`
 				INSERT INTO user_logs (user_id, action_type, prompt, success, video_path)
 				VALUES (?, 'generation', ?, 1, ?)`,
@@ -139,7 +154,7 @@ func GenerateVideo(prompt string, telegramID int64) (string, error) {
 		telegramID, prompt,
 	)
 
-	return "", fmt.Errorf("видео не сгенерировалось за отведённое время")
+	return "", fmt.Errorf("❌ видео не сгенерировалось за отведённое время")
 }
 
 func fetchOperation(opID string) ([]byte, error) {
