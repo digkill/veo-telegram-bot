@@ -77,6 +77,25 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	userID := msg.From.ID
 	username := msg.From.UserName
 
+	// 👇 Вот это вставь прямо сюда:
+	if msg.ReplyToMessage != nil && strings.Contains(msg.ReplyToMessage.Text, "укажи свой email") {
+		email := strings.TrimSpace(msg.Text)
+		if !strings.Contains(email, "@") {
+			bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Это не похоже на email, попробуй ещё раз."))
+			return
+		}
+
+		err := repository.UpdateUserContact(userID, email, "")
+		if err != nil {
+			bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Не удалось сохранить email."))
+			return
+		}
+
+		bot.Send(tgbotapi.NewMessage(chatID, "✅ Email сохранён! Теперь можешь выбрать пакет."))
+		showBuyOptions(bot, chatID)
+		return
+	}
+
 	switch text {
 	case "/start":
 		msg := tgbotapi.NewMessage(chatID, welcomeMessage)
@@ -126,7 +145,15 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 			}
 		}
 
+		if text == "" {
+			text = msg.Caption
+		}
+
 		if err := cache.StorePromptRequest(userID, text, imageBase64); err != nil {
+			logger.LogError("redis_store", map[string]interface{}{
+				"user_id": userID,
+				"error":   err.Error(),
+			})
 			bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Ошибка при сохранении запроса"))
 			return
 		}
@@ -205,7 +232,23 @@ func handleCallback(bot *tgbotapi.BotAPI, cb *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	// Сборка чека (provider_data)
+	user, err := repository.GetUserByID(cb.Message.Chat.ID)
+	if err != nil {
+		bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, "⚠️ Не удалось получить данные пользователя."))
+
+	}
+
+	if user.Email == "" {
+		msg := tgbotapi.NewMessage(cb.Message.Chat.ID, "📧 Пожалуйста, укажи свой email, чтобы мы могли оформить чек.")
+		msg.ReplyMarkup = tgbotapi.ForceReply{ForceReply: true, Selective: true}
+		bot.Send(msg)
+		return
+	}
+
+	// может быть "", это нормально
+	//phone := cb.From.PhoneNumber
+
+	// Сборка чека
 	receiptItem := map[string]interface{}{
 		"description": "Покупка кредитов VeoBot",
 		"quantity":    1.0,
@@ -213,39 +256,46 @@ func handleCallback(bot *tgbotapi.BotAPI, cb *tgbotapi.CallbackQuery) {
 			"value":    fmt.Sprintf("%.2f", float64(price)/100), // "450.00"
 			"currency": "RUB",
 		},
-		"vat_code":        1,
-		"payment_mode":    "full_payment",
-		"payment_subject": "service",
+		"vat_code":        1,              // ставка НДС
+		"payment_mode":    "full_payment", // полная оплата
+		"payment_subject": "service",      // услуга
 	}
 
-	providerDataMap := map[string]interface{}{
+	// Здесь нужно вставить email, phone и т.п. из базы или из заказа
+	customer := map[string]interface{}{
+		"email": user.Email,
+		//"phone": phone,
+	}
+
+	// Собираем структуру provider_data
+	providerData := map[string]interface{}{
 		"receipt": map[string]interface{}{
 			"items":           []interface{}{receiptItem},
-			"tax_system_code": 1, // УСН (можно поменять при необходимости)
+			"tax_system_code": 1, // ОСН, актуально для РФ
+			"customer":        customer,
 		},
 	}
-
-	providerDataJSON, err := json.Marshal(providerDataMap)
+	providerDataJSON, err := json.Marshal(providerData)
 	if err != nil {
 		bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, "⚠️ Ошибка при формировании чека"))
 		return
 	}
 
 	// Инвойс
+	// Формируем инвойс
 	invoice := tgbotapi.InvoiceConfig{
-		BaseChat:            tgbotapi.BaseChat{ChatID: cb.Message.Chat.ID},
-		Title:               "Покупка кредитов",
-		Description:         fmt.Sprintf("Пакет: %s", label),
-		Payload:             fmt.Sprintf("credits_%d", credits),
-		ProviderToken:       os.Getenv("PROVIDER_TOKEN"),
-		StartParameter:      startParam,
-		Currency:            "RUB",
-		Prices:              []tgbotapi.LabeledPrice{{Label: label, Amount: price}},
-		NeedEmail:           true,
-		NeedPhoneNumber:     true,
-		SuggestedTipAmounts: []int{}, // ключевое исправление
+		BaseChat:       tgbotapi.BaseChat{ChatID: cb.Message.Chat.ID},
+		Title:          "Покупка кредитов",
+		Description:    fmt.Sprintf("Пакет: %s", label),
+		Payload:        fmt.Sprintf("credits_%d", credits),
+		ProviderToken:  os.Getenv("PROVIDER_TOKEN"),
+		Currency:       "RUB",
+		Prices:         []tgbotapi.LabeledPrice{{Label: label, Amount: price}},
+		StartParameter: startParam,
+		// NeedEmail:      true,
+		//NeedPhoneNumber:     true,
 		ProviderData:        string(providerDataJSON),
-		// 💡 Tip-amounts полностью исключаем
+		SuggestedTipAmounts: []int{}, // обязателен пустой массив, если чаевые не нужны
 	}
 
 	// Отправка инвойса
@@ -260,6 +310,24 @@ func handleCallback(bot *tgbotapi.BotAPI, cb *tgbotapi.CallbackQuery) {
 }
 
 func showBuyOptions(bot *tgbotapi.BotAPI, chatID int64) {
+	userID := chatID // если ты не используешь групповой чат
+
+	hasEmail, err := repository.HasEmail(userID)
+	if err != nil {
+		bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Не удалось проверить email"))
+
+	}
+
+	if !hasEmail {
+		// Спросим email
+		msg := tgbotapi.NewMessage(chatID, "📧 Пожалуйста, укажи свой email для получения чека:")
+		msg.ReplyMarkup = tgbotapi.ForceReply{ForceReply: true, Selective: true}
+		bot.Send(msg)
+		// При следующем сообщении будет reply_to_message — нужно отследить
+		return
+	}
+
+	// Если email есть — показать варианты покупки
 	msg := tgbotapi.NewMessage(chatID, "Выбери пакет кредитов 💳")
 	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("200 кр. — 450 ₽", "buy_200")),

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/digkill/veo-telegram-bot/internal/db"
+	"github.com/digkill/veo-telegram-bot/internal/models"
 )
 
 func EnsureUser(telegramID int64, username string) error {
@@ -37,6 +38,34 @@ func GetBalance(userID int64) (int, error) {
 }
 
 func UpdateUserContact(userID int64, email string, phone string) error {
-	_, err := db.DB.Exec(`UPDATE user SET email = ?, phone = ? WHERE telegram_id = ?`, email, phone, userID)
+	_, err := db.DB.Exec(`UPDATE users SET email = ?, phone = ? WHERE telegram_id = ?`, email, phone, userID)
 	return err
+}
+
+func HasEmail(userID int64) (bool, error) {
+	var email string
+	err := db.DB.QueryRow("SELECT email FROM users WHERE telegram_id = ?", userID).Scan(&email)
+	if err != nil {
+		return false, err
+	}
+	return email != "", nil
+}
+
+func GetUserByID(userID int64) (models.User, error) {
+	var user models.User
+	query := `SELECT id, telegram_id, username, email, phone FROM users WHERE telegram_id = ? LIMIT 1`
+	err := db.DB.QueryRow(query, userID).Scan(
+		&user.ID,
+		&user.TelegramID,
+		&user.Username,
+		&user.Email,
+		&user.Phone,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return user, fmt.Errorf("пользователь не найден")
+		}
+		return user, err
+	}
+	return user, nil
 }
