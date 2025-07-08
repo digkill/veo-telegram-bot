@@ -1,7 +1,9 @@
 package repository
 
 import (
+	"database/sql"
 	_ "database/sql"
+	"errors"
 	"fmt"
 	"github.com/digkill/veo-telegram-bot/internal/db"
 )
@@ -20,4 +22,16 @@ func EnsureUser(telegramID int64, username string) error {
 		}
 	}
 	return nil
+}
+
+func GetBalance(userID int64) (int, error) {
+	var credits int
+	err := db.DB.QueryRow("SELECT credits FROM users WHERE telegram_id = ?", userID).Scan(&credits)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil // пользователь пока не существует — 0 кредитов
+		}
+		return 0, err
+	}
+	return credits, nil
 }

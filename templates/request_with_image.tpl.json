@@ -1,13 +1,12 @@
 {
   "instances": [
     {
-      "prompt": "{{.Prompt}}"{{if .Image64}},
-  ,
-    "image": {
-      "bytesBase64Encoded": "{{.Image64}}",
-      "mimeType": "image/jpeg"
-    }{{end}}
-  }
+      "prompt": "{{.Prompt}}",
+      "image": {
+        "bytesBase64Encoded": "{{.Image64}}",
+        "mimeType": "image/jpeg"
+      }
+    }
   ],
   "parameters": {
     "aspectRatio": "{{.AspectRatio}}",
@@ -15,7 +14,7 @@
     "durationSeconds": "8",
     "personGeneration": "allow_all",
     "enablePromptRewriting": true,
-    "addWatermark": true,
+    "addWatermark": false,
     "includeRaiReason": true
   }
 }

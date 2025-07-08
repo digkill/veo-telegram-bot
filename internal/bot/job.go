@@ -2,7 +2,6 @@ package bot
 
 import (
 	"errors"
-	_ "fmt"
 	"github.com/digkill/veo-telegram-bot/internal/generator"
 	storage "github.com/digkill/veo-telegram-bot/internal/repository"
 	"os"
@@ -29,7 +28,8 @@ func HandleVideoCommand(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 
 	bot.Send(tgbotapi.NewMessage(chatID, "🎬 Генерирую видео, подожди немного..."))
 
-	videoPath, err := generator.GenerateVideo(prompt, userID)
+	// Вызов генерации с пустым изображением (в этой команде оно не передаётся)
+	videoPath, err := generator.GenerateVideo(prompt, userID, "")
 	if err != nil {
 		bot.Send(tgbotapi.NewMessage(chatID, "❌ Ошибка генерации: "+err.Error()))
 		// (при желании: можно вернуть кредиты)
@@ -41,6 +41,6 @@ func HandleVideoCommand(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	video.Caption = "Готово! ✨"
 	bot.Send(video)
 
-	// очистка
+	// Очистка файла
 	defer os.Remove(videoPath)
 }

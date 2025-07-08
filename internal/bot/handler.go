@@ -1,44 +1,27 @@
 package bot
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/digkill/veo-telegram-bot/internal/generator"
-	storage "github.com/digkill/veo-telegram-bot/internal/repository"
+	"github.com/digkill/veo-telegram-bot/internal/logger"
+	"github.com/digkill/veo-telegram-bot/internal/repository"
+	"github.com/digkill/veo-telegram-bot/internal/utils"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 )
 
-type LogEntry struct {
-	Time      string `json:"time"`
-	UserID    int64  `json:"user_id"`
-	Username  string `json:"username,omitempty"`
-	Action    string `json:"action"`
-	Message   string `json:"message,omitempty"`
-	Prompt    string `json:"prompt,omitempty"`
-	Success   bool   `json:"success"`
-	VideoPath string `json:"video_path,omitempty"`
-	Error     string `json:"error,omitempty"`
-}
-
-func logToFile(entry LogEntry) {
-	entry.Time = time.Now().Format("2006-01-02 15:04:05")
-	data, _ := json.Marshal(entry)
-	f, _ := os.OpenFile("storage/logs/logs.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	defer f.Close()
-	f.Write(append(data, '\n'))
-}
-
 func HandleUpdate(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
+	logger.LogUpdate(update)
+
 	if update.Message != nil {
 		handleMessage(bot, update.Message)
 	}
 
 	if update.CallbackQuery != nil {
+		logger.LogCallback(update.CallbackQuery)
 		handleCallback(bot, update.CallbackQuery)
 	}
 
@@ -56,50 +39,86 @@ func HandleUpdate(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 }
 
 func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
+	logger.LogMessage(msg)
+
+	if msg.SuccessfulPayment != nil {
+		return // не запускаем генерацию на сообщении об оплате
+	}
+
 	chatID := msg.Chat.ID
 	text := msg.Text
 	userID := msg.From.ID
 	username := msg.From.UserName
 
-	logToFile(LogEntry{UserID: userID, Username: username, Action: "user_message", Message: text, Success: true})
-
-	if text == "/start" {
+	switch text {
+	case "/start":
 		bot.Send(tgbotapi.NewMessage(chatID, "Привет! Напиши промт для генерации видео, например:\n\n`Кот на пляже на закате #9:16`\n\nили используй команду /buy чтобы купить кредиты 💳"))
 		return
-	}
-
-	if text == "/buy" {
+	case "/buy":
 		showBuyOptions(bot, chatID)
+		return
+	case "/balance":
+		balance, err := repository.GetBalance(userID)
+		if err != nil {
+			bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Ошибка при получении баланса"))
+			return
+		}
+		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("💰 У тебя %d кредитов.", balance)))
 		return
 	}
 
 	go func() {
-		if err := storage.EnsureUser(userID, username); err != nil {
+		if err := repository.EnsureUser(userID, username); err != nil {
 			bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Ошибка: "+err.Error()))
-			logToFile(LogEntry{UserID: userID, Username: username, Action: "ensure_user", Prompt: text, Success: false, Error: err.Error()})
 			return
 		}
 
-		bot.Send(tgbotapi.NewMessage(chatID, "🎬 Генерирую видео, подожди 30–60 секунд..."))
-
-		videoPath, err := generator.GenerateVideo(text, userID)
+		balance, err := repository.GetBalance(userID)
 		if err != nil {
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Видео не удалось сгенерировать: "+err.Error()))
-			logToFile(LogEntry{UserID: userID, Username: username, Action: "generate", Prompt: text, Success: false, Error: err.Error()})
+			bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Не удалось получить баланс"))
+			return
+		}
+
+		if balance < 150 {
+			bot.Send(tgbotapi.NewMessage(chatID, "😢 У тебя недостаточно кредитов для генерации видео (нужно 150). Пополни баланс через /buy"))
+			return
+		}
+
+		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("🎬 Генерирую видео (150 кр.)… У тебя %d кр. осталось.", balance)))
+
+		imageBase64 := ""
+		if msg.Photo != nil && len(msg.Photo) > 0 {
+			photo := msg.Photo[len(msg.Photo)-1]
+			file, err := bot.GetFile(tgbotapi.FileConfig{FileID: photo.FileID})
+			if err == nil {
+				url := file.Link(bot.Token)
+				imageBase64, err = utils.DownloadAndEncodeImage(url)
+				if err != nil {
+					logger.LogError("image", map[string]interface{}{
+						"user_id": userID,
+						"error":   err.Error(),
+					})
+				}
+			}
+		}
+
+		videoPath, err := generator.GenerateVideo(text, userID, imageBase64)
+		if err != nil {
+			bot.Send(tgbotapi.NewMessage(chatID, "❌ Видео не удалось сгенерировать: "+err.Error()+"\n\n💡 Не волнуйся, кредиты не списаны. Попробуй переформулировать запрос или используй другой промт."))
+			repository.LogAction(userID, "generation_failed", text, false, "")
 			if videoPath != "" {
 				_ = os.Remove(videoPath)
 			}
 			return
 		}
 
-		if err := storage.SubtractCredits(userID, 150); err != nil {
-			if errors.Is(err, storage.ErrInsufficientCredits) {
+		if err := repository.SubtractCredits(userID, 150); err != nil {
+			if errors.Is(err, repository.ErrInsufficientCredits) {
 				bot.Send(tgbotapi.NewMessage(chatID, "❌ Видео сгенерировано, но у тебя недостаточно кредитов для его получения. Купи пакет через /buy"))
-				logToFile(LogEntry{UserID: userID, Username: username, Action: "insufficient_credits", Prompt: text, Success: false, VideoPath: videoPath})
+				repository.LogAction(userID, "delivery_failed", text, false, videoPath)
 				_ = os.Remove(videoPath)
 			} else {
 				bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Ошибка при списании: "+err.Error()))
-				logToFile(LogEntry{UserID: userID, Username: username, Action: "debit_failed", Prompt: text, Success: false, Error: err.Error()})
 			}
 			return
 		}
@@ -108,22 +127,17 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 		video.Caption = "Вот твоё видео!"
 		bot.Send(video)
 
-		logToFile(LogEntry{UserID: userID, Username: username, Action: "generate_success", Prompt: text, Success: true, VideoPath: videoPath})
+		newBalance, _ := repository.GetBalance(userID)
+		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Успешно! Остаток: %d кр.", newBalance)))
 	}()
 }
 
 func showBuyOptions(bot *tgbotapi.BotAPI, chatID int64) {
 	msg := tgbotapi.NewMessage(chatID, "Выбери пакет кредитов 💳")
 	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("200 кр. — 450 ₽", "buy_200"),
-		),
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("500 кр. — 900 ₽", "buy_500"),
-		),
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("1200 кр. — 1800 ₽", "buy_1200"),
-		),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("200 кр. — 450 ₽", "buy_200")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("500 кр. — 900 ₽", "buy_500")),
+		tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("1200 кр. — 1800 ₽", "buy_1200")),
 	)
 	bot.Send(msg)
 }
@@ -158,13 +172,12 @@ func handleCallback(bot *tgbotapi.BotAPI, cb *tgbotapi.CallbackQuery) {
 
 	if _, err := bot.Send(invoice); err != nil {
 		bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, "❌ Ошибка при отправке инвойса: "+err.Error()))
-		logToFile(LogEntry{UserID: cb.From.ID, Username: cb.From.UserName, Action: "invoice_error", Success: false, Error: err.Error()})
-	} else {
-		logToFile(LogEntry{UserID: cb.From.ID, Username: cb.From.UserName, Action: "invoice_sent", Message: label, Success: true})
 	}
 }
 
 func handlePayment(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
+	logger.LogPayment(msg)
+
 	payload := msg.SuccessfulPayment.InvoicePayload
 	userID := msg.From.ID
 	username := msg.From.UserName
@@ -173,13 +186,18 @@ func handlePayment(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 		parts := strings.Split(payload, "_")
 		credits, _ := strconv.Atoi(parts[1])
 
-		if err := storage.AddCredits(userID, username, credits); err != nil {
+		if err := repository.AddCredits(userID, username, credits); err != nil {
 			bot.Send(tgbotapi.NewMessage(msg.Chat.ID, "⚠️ Ошибка при начислении кредитов"))
-			logToFile(LogEntry{UserID: userID, Username: username, Action: "payment_failed", Success: false, Error: err.Error()})
 			return
 		}
 
-		bot.Send(tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf("✅ %d кредитов зачислено!", credits)))
-		logToFile(LogEntry{UserID: userID, Username: username, Action: "payment_success", Message: fmt.Sprintf("%d credits", credits), Success: true})
+		// Получим обновлённый баланс
+		balance, err := repository.GetBalance(userID)
+		if err != nil {
+			bot.Send(tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf("✅ %d кредитов зачислено!\n⚠️ Но не удалось получить текущий баланс.", credits)))
+			return
+		}
+
+		bot.Send(tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf("✅ %d кредитов зачислено!\n💰 Текущий баланс: %d кр.", credits, balance)))
 	}
 }
