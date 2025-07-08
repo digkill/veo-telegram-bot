@@ -13,6 +13,32 @@ import (
 	"strings"
 )
 
+const welcomeMessage = `👋 Привет! Я Veo Telegram Bot — твой AI-помощник по генерации видео.
+
+🎥 Просто отправь мне текст (промт), и я создам видео с помощью Google Veo.
+
+📏 Укажи формат:
+• Пример: *Кот на пляже на закате #9:16*
+• Поддержка: #9:16, #16:9, #1:1
+
+💳 Напиши /buy, чтобы пополнить кредиты.
+📖 Напиши /help, чтобы узнать все команды.
+`
+
+const helpMessage = `📖 Список команд:
+
+/start — приветственное сообщение  
+/help — показать это меню  
+/balance — твой текущий баланс  
+/buy — купить кредиты  
+/ping — проверить статус бота
+
+💬 Просто отправь промт, например:
+*Фэнтези лес в лунном свете #16:9*
+
+🎞️ Через минуту ты получишь AI-видео!
+`
+
 func HandleUpdate(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 	logger.LogUpdate(update)
 
@@ -52,11 +78,21 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 
 	switch text {
 	case "/start":
-		bot.Send(tgbotapi.NewMessage(chatID, "Привет! Напиши промт для генерации видео, например:\n\n`Кот на пляже на закате #9:16`\n\nили используй команду /buy чтобы купить кредиты 💳"))
+		msg := tgbotapi.NewMessage(chatID, welcomeMessage)
+		msg.ParseMode = "Markdown"
+		bot.Send(msg)
 		return
+
+	case "/help":
+		msg := tgbotapi.NewMessage(chatID, helpMessage)
+		msg.ParseMode = "Markdown"
+		bot.Send(msg)
+		return
+
 	case "/buy":
 		showBuyOptions(bot, chatID)
 		return
+
 	case "/balance":
 		balance, err := repository.GetBalance(userID)
 		if err != nil {
