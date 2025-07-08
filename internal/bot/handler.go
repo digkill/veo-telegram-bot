@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/digkill/veo-telegram-bot/internal/cache"
 	"github.com/digkill/veo-telegram-bot/internal/generator"
@@ -204,20 +205,58 @@ func handleCallback(bot *tgbotapi.BotAPI, cb *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	invoice := tgbotapi.InvoiceConfig{
-		BaseChat:        tgbotapi.BaseChat{ChatID: cb.Message.Chat.ID},
-		Title:           "Покупка кредитов",
-		Description:     fmt.Sprintf("Пакет: %s", label),
-		Payload:         fmt.Sprintf("credits_%d", credits),
-		ProviderToken:   os.Getenv("PROVIDER_TOKEN"),
-		StartParameter:  startParam,
-		Currency:        "RUB",
-		Prices:          []tgbotapi.LabeledPrice{{Label: label, Amount: price}},
-		NeedEmail:       true,
-		NeedPhoneNumber: true,
+	// Сборка чека (provider_data)
+	receiptItem := map[string]interface{}{
+		"description": "Покупка кредитов VeoBot",
+		"quantity":    1.0,
+		"amount": map[string]interface{}{
+			"value":    fmt.Sprintf("%.2f", float64(price)/100), // "450.00"
+			"currency": "RUB",
+		},
+		"vat_code":        1,
+		"payment_mode":    "full_payment",
+		"payment_subject": "service",
 	}
 
-	bot.Send(invoice)
+	providerDataMap := map[string]interface{}{
+		"receipt": map[string]interface{}{
+			"items":           []interface{}{receiptItem},
+			"tax_system_code": 1, // УСН (можно поменять при необходимости)
+		},
+	}
+
+	providerDataJSON, err := json.Marshal(providerDataMap)
+	if err != nil {
+		bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, "⚠️ Ошибка при формировании чека"))
+		return
+	}
+
+	// Инвойс
+	invoice := tgbotapi.InvoiceConfig{
+		BaseChat:            tgbotapi.BaseChat{ChatID: cb.Message.Chat.ID},
+		Title:               "Покупка кредитов",
+		Description:         fmt.Sprintf("Пакет: %s", label),
+		Payload:             fmt.Sprintf("credits_%d", credits),
+		ProviderToken:       os.Getenv("PROVIDER_TOKEN"),
+		StartParameter:      startParam,
+		Currency:            "RUB",
+		Prices:              []tgbotapi.LabeledPrice{{Label: label, Amount: price}},
+		NeedEmail:           true,
+		NeedPhoneNumber:     true,
+		SuggestedTipAmounts: []int{}, // ключевое исправление
+		ProviderData:        string(providerDataJSON),
+		// 💡 Tip-amounts полностью исключаем
+	}
+
+	// Отправка инвойса
+	if _, err := bot.Send(invoice); err != nil {
+		logger.LogError("send_invoice", map[string]interface{}{
+			"user_id": cb.Message.Chat.ID,
+			"error":   err.Error(),
+			"json":    string(providerDataJSON),
+		})
+		bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, "❌ Ошибка при отправке инвойса: "+err.Error()))
+	}
 }
 
 func showBuyOptions(bot *tgbotapi.BotAPI, chatID int64) {
