@@ -41,7 +41,6 @@ func extractAspectRatio(prompt string) (string, string) {
 func GenerateVideo(prompt string, telegramID int64, imageBase64 string) (string, error) {
 	aspectRatio, cleanPrompt := extractAspectRatio(prompt)
 
-	// 📄 Выбираем шаблон
 	tplPath := "templates/request_without_image.tpl.json"
 	if strings.TrimSpace(imageBase64) != "" {
 		tplPath = "templates/request_with_image.tpl.json"
@@ -66,7 +65,6 @@ func GenerateVideo(prompt string, telegramID int64, imageBase64 string) (string,
 		return "", fmt.Errorf("ошибка шаблона: %w", err)
 	}
 
-	// 🔍 Проверим JSON на валидность
 	var jsonTest map[string]interface{}
 	if err := json.Unmarshal(buf.Bytes(), &jsonTest); err != nil {
 		logger.LogError("generator", map[string]interface{}{
@@ -78,10 +76,13 @@ func GenerateVideo(prompt string, telegramID int64, imageBase64 string) (string,
 		return "", fmt.Errorf("❌ Невалидный JSON: %s", err.Error())
 	}
 
-	// 💾 Сохраняем request.json (опционально)
-	_ = os.WriteFile("request.json", buf.Bytes(), 0644)
+	// 💾 Создаём временный файл
+	tmpFile := fmt.Sprintf("/tmp/request_%d.json", telegramID)
+	if err := os.WriteFile(tmpFile, buf.Bytes(), 0644); err != nil {
+		return "", fmt.Errorf("не удалось сохранить временный JSON: %w", err)
+	}
+	defer os.Remove(tmpFile) // удалим после использования
 
-	// 💬 Логируем тело запроса
 	logger.Logf("generator", map[string]interface{}{
 		"type":    "request_payload",
 		"user_id": telegramID,
@@ -89,20 +90,29 @@ func GenerateVideo(prompt string, telegramID int64, imageBase64 string) (string,
 		"json":    buf.String(),
 	})
 
-	// 📡 Curl запрос
-	cmd := exec.Command("bash", "-c", fmt.Sprintf(`
-		curl -s -X POST \
-		-H "Content-Type: application/json" \
-		-H "Authorization: Bearer $(gcloud auth print-access-token)" \
-		"https://%s/v1/projects/%s/locations/%s/publishers/google/models/%s:predictLongRunning" \
-		-d @request.json`, apiEndpoint, projectID, locationID, modelID))
+	cmd := exec.Command("curl", "-s", "-X", "POST",
+		"-H", "Content-Type: application/json",
+		"-H", "Authorization: Bearer "+getAccessToken(),
+		fmt.Sprintf("https://%s/v1/projects/%s/locations/%s/publishers/google/models/%s:predictLongRunning",
+			apiEndpoint, projectID, locationID, modelID),
+		"-d", "@"+tmpFile,
+	)
 
-	out, err := cmd.Output()
-	if err != nil {
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		logger.LogError("generator", map[string]interface{}{
+			"type":    "curl_error",
+			"stderr":  stderr.String(),
+			"user_id": telegramID,
+		})
 		return "", fmt.Errorf("ошибка curl: %w", err)
 	}
 
-	// 💬 Логируем ответ curl
+	// продолжение анализа stdout как обычно
+	out := stdout.Bytes()
 	logger.Logf("generator", map[string]interface{}{
 		"type":     "curl_response",
 		"user_id":  telegramID,
