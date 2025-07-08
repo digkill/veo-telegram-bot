@@ -12,7 +12,9 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     uts BIGINT
     );
+-- +goose StatementEnd
 
+-- +goose StatementBegin
 CREATE TABLE IF NOT EXISTS billing_transactions (
                                                     id INT AUTO_INCREMENT PRIMARY KEY,
                                                     user_id BIGINT,
@@ -22,7 +24,9 @@ CREATE TABLE IF NOT EXISTS billing_transactions (
     payload VARCHAR(255),
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+-- +goose StatementEnd
 
+-- +goose StatementBegin
 CREATE TABLE IF NOT EXISTS user_logs (
                                          id INT AUTO_INCREMENT PRIMARY KEY,
                                          user_id BIGINT,
@@ -32,7 +36,9 @@ CREATE TABLE IF NOT EXISTS user_logs (
     video_path TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+-- +goose StatementEnd
 
+-- +goose StatementBegin
 CREATE TABLE IF NOT EXISTS pending_videos (
                                               id INT AUTO_INCREMENT PRIMARY KEY,
                                               user_id BIGINT,
@@ -40,7 +46,9 @@ CREATE TABLE IF NOT EXISTS pending_videos (
                                               video_path TEXT,
                                               created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+-- +goose StatementEnd
 
+-- +goose StatementBegin
 CREATE TABLE IF NOT EXISTS generation_errors (
                                                  id INT AUTO_INCREMENT PRIMARY KEY,
                                                  user_id BIGINT NOT NULL,
@@ -55,8 +63,20 @@ CREATE TABLE IF NOT EXISTS generation_errors (
 -- +goose Down
 -- +goose StatementBegin
 DROP TABLE IF EXISTS generation_errors;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
 DROP TABLE IF EXISTS pending_videos;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
 DROP TABLE IF EXISTS user_logs;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
 DROP TABLE IF EXISTS billing_transactions;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
 DROP TABLE IF EXISTS users;
 -- +goose StatementEnd
