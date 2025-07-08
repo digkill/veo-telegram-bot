@@ -1,8 +1,8 @@
 package bot
 
 import (
-	"errors"
 	"fmt"
+	"github.com/digkill/veo-telegram-bot/internal/cache"
 	"github.com/digkill/veo-telegram-bot/internal/generator"
 	"github.com/digkill/veo-telegram-bot/internal/logger"
 	"github.com/digkill/veo-telegram-bot/internal/repository"
@@ -15,7 +15,7 @@ import (
 
 const welcomeMessage = `👋 Привет! Я Veo Telegram Bot — твой AI-помощник по генерации видео.
 
-🎥 Просто отправь мне текст (промт), и я создам видео с помощью Google Veo.
+🎥 Просто отправь мне текст (можешь с картинкой), и я создам видео.
 
 📏 Укажи формат:
 • Пример: *Кот на пляже на закате #9:16*
@@ -33,7 +33,7 @@ const helpMessage = `📖 Список команд:
 /buy — купить кредиты  
 /ping — проверить статус бота
 
-💬 Просто отправь промт, например:
+💬 Просто отправь текст (можешь с картинкой), например:
 *Фэнтези лес в лунном свете #16:9*
 
 🎞️ Через минуту ты получишь AI-видео!
@@ -68,7 +68,7 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	logger.LogMessage(msg)
 
 	if msg.SuccessfulPayment != nil {
-		return // не запускаем генерацию на сообщении об оплате
+		return
 	}
 
 	chatID := msg.Chat.ID
@@ -109,19 +109,6 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 			return
 		}
 
-		balance, err := repository.GetBalance(userID)
-		if err != nil {
-			bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Не удалось получить баланс"))
-			return
-		}
-
-		if balance < 150 {
-			bot.Send(tgbotapi.NewMessage(chatID, "😢 У тебя недостаточно кредитов для генерации видео (нужно 150). Пополни баланс через /buy"))
-			return
-		}
-
-		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("🎬 Генерирую видео (150 кр.)… У тебя %d кр. осталось.", balance)))
-
 		imageBase64 := ""
 		if msg.Photo != nil && len(msg.Photo) > 0 {
 			photo := msg.Photo[len(msg.Photo)-1]
@@ -138,34 +125,99 @@ func handleMessage(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 			}
 		}
 
-		videoPath, err := generator.GenerateVideo(text, userID, imageBase64)
-		if err != nil {
-			bot.Send(tgbotapi.NewMessage(chatID, "❌ Видео не удалось сгенерировать: "+err.Error()+"\n\n💡 Не волнуйся, кредиты не списаны. Попробуй переформулировать запрос или используй другой промт."))
-			repository.LogAction(userID, "generation_failed", text, false, "")
-			if videoPath != "" {
-				_ = os.Remove(videoPath)
-			}
+		if err := cache.StorePromptRequest(userID, text, imageBase64); err != nil {
+			bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Ошибка при сохранении запроса"))
 			return
 		}
 
-		if err := repository.SubtractCredits(userID, 150); err != nil {
-			if errors.Is(err, repository.ErrInsufficientCredits) {
-				bot.Send(tgbotapi.NewMessage(chatID, "❌ Видео сгенерировано, но у тебя недостаточно кредитов для его получения. Купи пакет через /buy"))
-				repository.LogAction(userID, "delivery_failed", text, false, videoPath)
-				_ = os.Remove(videoPath)
-			} else {
-				bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Ошибка при списании: "+err.Error()))
-			}
-			return
-		}
-
-		video := tgbotapi.NewVideo(chatID, tgbotapi.FilePath(videoPath))
-		video.Caption = "Вот твоё видео!"
-		bot.Send(video)
-
-		newBalance, _ := repository.GetBalance(userID)
-		bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("✅ Успешно! Остаток: %d кр.", newBalance)))
+		confirmBtn := tgbotapi.NewInlineKeyboardButtonData("✅ Подтвердить генерацию", fmt.Sprintf("confirm_%d", userID))
+		msg := tgbotapi.NewMessage(chatID, "🔄 Проверь промт и нажми кнопку, чтобы подтвердить генерацию:")
+		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(confirmBtn))
+		bot.Send(msg)
 	}()
+}
+
+func handleCallback(bot *tgbotapi.BotAPI, cb *tgbotapi.CallbackQuery) {
+	data := cb.Data
+
+	if strings.HasPrefix(data, "confirm_") {
+		userIDStr := strings.TrimPrefix(data, "confirm_")
+		userID, _ := strconv.ParseInt(userIDStr, 10, 64)
+
+		go func() {
+			prompt, imageBase64, err := cache.GetPromptData(userID)
+			if err != nil || prompt == "" {
+				bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, "⚠️ Не удалось получить данные запроса"))
+				return
+			}
+
+			balance, err := repository.GetBalance(userID)
+			if err != nil {
+				bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, "⚠️ Не удалось получить баланс"))
+				return
+			}
+
+			if balance < 150 {
+				bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, "😢 Недостаточно кредитов. Пополни баланс через /buy"))
+				return
+			}
+
+			bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, fmt.Sprintf("🎬 Генерирую видео (150 кр.)… У тебя %d кр. осталось.", balance)))
+
+			videoPath, err := generator.GenerateVideo(prompt, userID, imageBase64)
+			if err != nil {
+				bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, "❌ Не удалось сгенерировать видео: "+err.Error()))
+				repository.LogAction(userID, "generation_failed", prompt, false, "")
+				cache.ClearPrompt(userID)
+				return
+			}
+
+			if err := repository.SubtractCredits(userID, 150); err != nil {
+				bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, "⚠️ Ошибка при списании кредитов"))
+				return
+			}
+
+			video := tgbotapi.NewVideo(cb.Message.Chat.ID, tgbotapi.FilePath(videoPath))
+			video.Caption = "Вот твоё видео!"
+			bot.Send(video)
+
+			newBalance, _ := repository.GetBalance(userID)
+			bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, fmt.Sprintf("✅ Успешно! Остаток: %d кр.", newBalance)))
+
+			cache.ClearPrompt(userID)
+		}()
+		return
+	}
+
+	// обработка покупки
+	var credits, price int
+	var label, startParam string
+
+	switch data {
+	case "buy_200":
+		credits, price, label, startParam = 200, 45000, "200 кредитов", "buy_200"
+	case "buy_500":
+		credits, price, label, startParam = 500, 90000, "500 кредитов", "buy_500"
+	case "buy_1200":
+		credits, price, label, startParam = 1200, 180000, "1200 кредитов", "buy_1200"
+	default:
+		return
+	}
+
+	invoice := tgbotapi.InvoiceConfig{
+		BaseChat:        tgbotapi.BaseChat{ChatID: cb.Message.Chat.ID},
+		Title:           "Покупка кредитов",
+		Description:     fmt.Sprintf("Пакет: %s", label),
+		Payload:         fmt.Sprintf("credits_%d", credits),
+		ProviderToken:   os.Getenv("PROVIDER_TOKEN"),
+		StartParameter:  startParam,
+		Currency:        "RUB",
+		Prices:          []tgbotapi.LabeledPrice{{Label: label, Amount: price}},
+		NeedEmail:       true,
+		NeedPhoneNumber: true,
+	}
+
+	bot.Send(invoice)
 }
 
 func showBuyOptions(bot *tgbotapi.BotAPI, chatID int64) {
@@ -178,39 +230,6 @@ func showBuyOptions(bot *tgbotapi.BotAPI, chatID int64) {
 	bot.Send(msg)
 }
 
-func handleCallback(bot *tgbotapi.BotAPI, cb *tgbotapi.CallbackQuery) {
-	var credits, price int
-	var label, startParam string
-
-	switch cb.Data {
-	case "buy_200":
-		credits, price, label, startParam = 200, 45000, "200 кредитов", "buy_200"
-	case "buy_500":
-		credits, price, label, startParam = 500, 90000, "500 кредитов", "buy_500"
-	case "buy_1200":
-		credits, price, label, startParam = 1200, 180000, "1200 кредитов", "buy_1200"
-	default:
-		return
-	}
-
-	invoice := tgbotapi.InvoiceConfig{
-		BaseChat:            tgbotapi.BaseChat{ChatID: cb.Message.Chat.ID},
-		Title:               "Покупка кредитов",
-		Description:         fmt.Sprintf("Пакет: %s", label),
-		Payload:             fmt.Sprintf("credits_%d", credits),
-		ProviderToken:       os.Getenv("PROVIDER_TOKEN"),
-		StartParameter:      startParam,
-		Currency:            "RUB",
-		Prices:              []tgbotapi.LabeledPrice{{Label: label, Amount: price}},
-		SuggestedTipAmounts: []int{},
-		IsFlexible:          false,
-	}
-
-	if _, err := bot.Send(invoice); err != nil {
-		bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, "❌ Ошибка при отправке инвойса: "+err.Error()))
-	}
-}
-
 func handlePayment(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	logger.LogPayment(msg)
 
@@ -218,7 +237,6 @@ func handlePayment(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	userID := msg.From.ID
 	username := msg.From.UserName
 
-	// ✅ Получаем email и телефон из заказа, если указано
 	var email, phone string
 	if msg.SuccessfulPayment.OrderInfo != nil {
 		if msg.SuccessfulPayment.OrderInfo.Email != "" {
@@ -229,7 +247,6 @@ func handlePayment(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 		}
 	}
 
-	// Сохраняем email и телефон в таблицу user
 	if err := repository.UpdateUserContact(userID, email, phone); err != nil {
 		logger.LogError("payment_contact_update", map[string]interface{}{
 			"user_id": userID,
@@ -246,7 +263,6 @@ func handlePayment(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 			return
 		}
 
-		// Получим обновлённый баланс
 		balance, err := repository.GetBalance(userID)
 		if err != nil {
 			bot.Send(tgbotapi.NewMessage(msg.Chat.ID, fmt.Sprintf("✅ %d кредитов зачислено!\n⚠️ Но не удалось получить текущий баланс.", credits)))
