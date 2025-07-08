@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/digkill/veo-telegram-bot/internal/cache"
 	"github.com/digkill/veo-telegram-bot/internal/logger"
 	"log"
 
@@ -12,7 +13,7 @@ import (
 )
 
 func main() {
-
+	cache.Init()
 	logger.Init()
 	// подключаем БД
 	db.Connect()
