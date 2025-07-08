@@ -19,7 +19,7 @@ const welcomeMessage = `👋 Привет! Я Veo Telegram Bot — твой AI-�
 
 📏 Укажи формат:
 • Пример: *Кот на пляже на закате #9:16*
-• Поддержка: #9:16, #16:9, #1:1
+• Поддержка: #9:16, #16:9
 
 💳 Напиши /buy, чтобы пополнить кредиты.
 📖 Напиши /help, чтобы узнать все команды.
@@ -217,6 +217,25 @@ func handlePayment(bot *tgbotapi.BotAPI, msg *tgbotapi.Message) {
 	payload := msg.SuccessfulPayment.InvoicePayload
 	userID := msg.From.ID
 	username := msg.From.UserName
+
+	// ✅ Получаем email и телефон из заказа, если указано
+	var email, phone string
+	if msg.SuccessfulPayment.OrderInfo != nil {
+		if msg.SuccessfulPayment.OrderInfo.Email != "" {
+			email = msg.SuccessfulPayment.OrderInfo.Email
+		}
+		if msg.SuccessfulPayment.OrderInfo.PhoneNumber != "" {
+			phone = msg.SuccessfulPayment.OrderInfo.PhoneNumber
+		}
+	}
+
+	// Сохраняем email и телефон в таблицу user
+	if err := repository.UpdateUserContact(userID, email, phone); err != nil {
+		logger.LogError("payment_contact_update", map[string]interface{}{
+			"user_id": userID,
+			"error":   err.Error(),
+		})
+	}
 
 	if strings.HasPrefix(payload, "credits_") {
 		parts := strings.Split(payload, "_")

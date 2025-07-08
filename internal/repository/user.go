@@ -35,3 +35,8 @@ func GetBalance(userID int64) (int, error) {
 	}
 	return credits, nil
 }
+
+func UpdateUserContact(userID int64, email string, phone string) error {
+	_, err := db.DB.Exec(`UPDATE user SET email = ?, phone = ? WHERE telegram_id = ?`, email, phone, userID)
+	return err
+}
