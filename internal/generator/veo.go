@@ -168,20 +168,54 @@ func GenerateVideo(prompt string, telegramID int64, imageBase64 string) (string,
 		}
 
 		if response, ok := fetchResp["response"].(map[string]interface{}); ok {
-			videos := response["videos"].([]interface{})
-			if len(videos) == 0 {
+			videosRaw, ok := response["videos"]
+			if !ok {
+				logger.LogError("generator", map[string]interface{}{
+					"type":    "missing_videos_field",
+					"payload": response,
+					"user_id": telegramID,
+				})
+				continue // Пробуем снова на следующем шаге
+			}
+
+			videos, ok := videosRaw.([]interface{})
+			if !ok || len(videos) == 0 {
+				logger.LogError("generator", map[string]interface{}{
+					"type":    "invalid_videos_format",
+					"payload": videosRaw,
+					"user_id": telegramID,
+				})
 				continue
 			}
-			video := videos[0].(map[string]interface{})
-			videoBase64 := video["bytesBase64Encoded"].(string)
 
+			video, ok := videos[0].(map[string]interface{})
+			if !ok {
+				logger.LogError("generator", map[string]interface{}{
+					"type":    "invalid_video_entry",
+					"payload": videos[0],
+					"user_id": telegramID,
+				})
+				continue
+			}
+
+			videoBase64, ok := video["bytesBase64Encoded"].(string)
+			if !ok {
+				logger.LogError("generator", map[string]interface{}{
+					"type":    "missing_bytesBase64Encoded",
+					"payload": video,
+					"user_id": telegramID,
+				})
+				continue
+			}
+
+			// декодируем, сохраняем файл
 			videoData, err := base64.StdEncoding.DecodeString(videoBase64)
 			if err != nil {
-				return "", err
+				return "", fmt.Errorf("decode error: %w", err)
 			}
 
 			dir := fmt.Sprintf("storage/media/%d", telegramID)
-			os.MkdirAll(dir, 0755)
+			_ = os.MkdirAll(dir, 0755)
 
 			filename := fmt.Sprintf("%s/video_%d.mp4", dir, time.Now().Unix())
 			if err := os.WriteFile(filename, videoData, 0644); err != nil {
@@ -189,13 +223,14 @@ func GenerateVideo(prompt string, telegramID int64, imageBase64 string) (string,
 			}
 
 			_, _ = db.DB.Exec(`
-				INSERT INTO user_logs (user_id, action_type, prompt, success, video_path)
-				VALUES (?, 'generation', ?, 1, ?)`,
+		INSERT INTO user_logs (user_id, action_type, prompt, success, video_path)
+		VALUES (?, 'generation', ?, 1, ?)`,
 				telegramID, prompt, filename,
 			)
 
 			return filename, nil
 		}
+
 	}
 
 	_, _ = db.DB.Exec(`
