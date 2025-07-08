@@ -177,4 +177,4 @@ If something breaks:
 
 ## 📜 License
 
-MIT © 2025 [Mediarise](https://mediarise.ru)
+PRIVATE © 2025 [Mediarise](https://mediarise.org)
