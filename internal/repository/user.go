@@ -45,7 +45,12 @@ func UpdateUserContact(userID int64, email string, phone string) error {
 func HasEmail(userID int64) (bool, error) {
 	var email string
 	err := db.DB.QueryRow("SELECT email FROM users WHERE telegram_id = ?", userID).Scan(&email)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Пользователь с таким telegram_id не найден — считаем, что email нет
+		return false, nil
+	}
 	if err != nil {
+		// Любая другая ошибка — пробрасываем выше
 		return false, err
 	}
 	return email != "", nil
