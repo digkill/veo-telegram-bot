@@ -314,8 +314,12 @@ func showBuyOptions(bot *tgbotapi.BotAPI, chatID int64) {
 
 	hasEmail, err := repository.HasEmail(userID)
 	if err != nil {
+		logger.LogError("send_invoice", map[string]interface{}{
+			"user_id": chatID,
+			"error":   err.Error(),
+			"json":    hasEmail,
+		})
 		bot.Send(tgbotapi.NewMessage(chatID, "⚠️ Не удалось проверить email"))
-
 	}
 
 	if !hasEmail {
