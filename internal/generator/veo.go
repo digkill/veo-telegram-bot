@@ -27,10 +27,6 @@ func extractAspectRatio(prompt string) (string, string) {
 	switch {
 	case strings.Contains(lower, "#9:16"):
 		return "9:16", strings.ReplaceAll(prompt, "#9:16", "")
-	case strings.Contains(lower, "#1:1"):
-		return "1:1", strings.ReplaceAll(prompt, "#1:1", "")
-	case strings.Contains(lower, "#4:5"):
-		return "4:5", strings.ReplaceAll(prompt, "#4:5", "")
 	case strings.Contains(lower, "#16:9"):
 		return "16:9", strings.ReplaceAll(prompt, "#16:9", "")
 	default:
@@ -77,7 +73,7 @@ func GenerateVideo(prompt string, telegramID int64, imageBase64 string) (string,
 	}
 
 	// 💾 Создаём временный файл
-	tmpFile := fmt.Sprintf("/tmp/request_%d.json", telegramID)
+	tmpFile := fmt.Sprintf("./tmp/request_%d.json", telegramID)
 	if err := os.WriteFile(tmpFile, buf.Bytes(), 0644); err != nil {
 		return "", fmt.Errorf("не удалось сохранить временный JSON: %w", err)
 	}
@@ -250,7 +246,7 @@ func GenerateVideo(prompt string, telegramID int64, imageBase64 string) (string,
 func fetchOperation(opID string) ([]byte, error) {
 	jsonBody := fmt.Sprintf(`{"operationName": "%s"}`, opID)
 	cmd := exec.Command("curl", "-s", "-X", "POST",
-		"-H", "Content-Type: application/json",
+		"-H", "Content-Type: application/json;  charset=utf-8",
 		"-H", "Authorization: Bearer "+getAccessToken(),
 		fmt.Sprintf("https://%s/v1/projects/%s/locations/%s/publishers/google/models/%s:fetchPredictOperation",
 			apiEndpoint, projectID, locationID, modelID),

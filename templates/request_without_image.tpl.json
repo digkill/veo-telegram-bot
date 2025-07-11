@@ -11,6 +11,7 @@
     "personGeneration": "allow_all",
     "enablePromptRewriting": true,
     "addWatermark": false,
-    "includeRaiReason": true
+    "includeRaiReason": true,
+    "generateAudio": true
   }
 }

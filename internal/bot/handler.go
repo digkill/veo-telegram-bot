@@ -190,7 +190,7 @@ func handleCallback(bot *tgbotapi.BotAPI, cb *tgbotapi.CallbackQuery) {
 				return
 			}
 
-			bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, fmt.Sprintf("🎬 Генерирую видео (150 кр.)… У тебя %d кр. осталось.", balance)))
+			bot.Send(tgbotapi.NewMessage(cb.Message.Chat.ID, fmt.Sprintf("🎬 Генерирую видео (150 кр.)… У тебя %d кр. на данный момент.", balance)))
 
 			videoPath, err := generator.GenerateVideo(prompt, userID, imageBase64)
 			if err != nil {
@@ -271,7 +271,7 @@ func handleCallback(bot *tgbotapi.BotAPI, cb *tgbotapi.CallbackQuery) {
 	providerData := map[string]interface{}{
 		"receipt": map[string]interface{}{
 			"items":           []interface{}{receiptItem},
-			"tax_system_code": 1, // ОСН, актуально для РФ
+			"tax_system_code": 6, // ОСН, актуально для РФ
 			"customer":        customer,
 		},
 	}
